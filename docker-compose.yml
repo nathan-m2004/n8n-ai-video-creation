@@ -1,0 +1,106 @@
+services:
+    n8n:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: n8n
+        restart: always
+        ports:
+            - "5678:5678"
+        environment:
+            # --- SYSTEM ---
+            - NODE_ENV=${NODE_ENV:-production}
+            - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}
+            - TZ=${TZ:-America/Sao_Paulo}
+
+            # --- SECURITY ---
+            - NODES_EXCLUDE=${NODES_EXCLUDE:-}
+            - NODE_FUNCTION_ALLOW_EXTERNAL=${NODE_FUNCTION_ALLOW_EXTERNAL:-fs,path,child_process}
+            - N8N_RESTRICT_FILE_ACCESS_TO=${N8N_RESTRICT_FILE_ACCESS_TO:-/tmp_media}
+            - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}
+
+            # --- PATHS ---
+            - PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+            # --- NETWORK ---
+            - N8N_HOST=${N8N_HOST:-localhost}
+            - N8N_PORT=5678
+            - N8N_PROTOCOL=http
+            - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+
+            # --- DATABASE ---
+            - DB_TYPE=postgresdb
+            - DB_POSTGRESDB_HOST=postgres
+            - DB_POSTGRESDB_PORT=5432
+            - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+            - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
+            - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-n8n_secure_password}
+        volumes:
+            - n8n_data:/home/node/.n8n
+            - ./media:/tmp_media
+        networks:
+            - n8n_network
+        depends_on:
+            postgres:
+                condition: service_healthy
+        # --- RESOURCE LIMITS (CRITICAL FOR VIDEO RENDERING) ---
+        deploy:
+            resources:
+                limits:
+                    cpus: "2.0" # Cap at 2 CPU cores
+                    memory: 3072M # Cap at 3GB RAM (Video rendering needs this)
+                reservations:
+                    memory: 512M # Guarantee at least 512MB
+
+    postgres:
+        image: postgres:16-alpine
+        container_name: n8n_postgres
+        restart: always
+        environment:
+            - POSTGRES_DB=${POSTGRES_DB:-n8n}
+            - POSTGRES_USER=${POSTGRES_USER:-n8n}
+            - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-n8n_secure_password}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        networks:
+            - n8n_network
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U n8n"]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+        # --- RESOURCE LIMITS ---
+        deploy:
+            resources:
+                limits:
+                    cpus: "1.0"
+                    memory: 512M # DB rarely needs more for this size
+                reservations:
+                    memory: 128M
+
+    kokoro-tts:
+        image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+        container_name: kokoro-tts
+        restart: unless-stopped
+        ports:
+            - "8880:8880"
+        environment:
+            - PYTHONUNBUFFERED=1
+        networks:
+            - n8n_network
+        # --- RESOURCE LIMITS (PREVENT AI FREEZE) ---
+        deploy:
+            resources:
+                limits:
+                    cpus: "1.5" # Prevent it from stealing all CPU from n8n
+                    memory: 2048M # Cap at 2GB RAM
+                reservations:
+                    memory: 512M
+
+volumes:
+    n8n_data:
+    postgres_data:
+
+networks:
+    n8n_network:
+        driver: bridge

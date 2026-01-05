@@ -1,0 +1,1304 @@
+{
+    "name": "Automated Tiktok Videos",
+    "nodes": [
+        {
+            "parameters": {
+                "command": "=# --- 1. SETUP & TITLE SANITIZATION ---\n# !!! TESTING FLAG !!!\nTEST_DURATION=\"\" \n\nBASE_DIR=\"/tmp_media/PERSONA/Videos\"\nGAMEPLAY_DIR=\"/tmp_media/Gameplay\"\nRAW_TITLE=\"{{ $('Format Groq').item.json.title }}\"\n\n# Clean the title\nCLEAN_TITLE=$(echo \"$RAW_TITLE\" | sed 's/[^a-zA-Z0-9]/_/g' | tr -s '_')\n\n# Fallback\nif [ -z \"$CLEAN_TITLE\" ]; then\n    CLEAN_TITLE=\"PERSONA_$(date +%s)\"\nfi\n\n# Conditional Output Name\nif [ -n \"$TEST_DURATION\" ]; then\n    OUTPUT_FILE=\"${BASE_DIR}/${CLEAN_TITLE}_TEST.mp4\"\nelse\n    OUTPUT_FILE=\"${BASE_DIR}/${CLEAN_TITLE}.mp4\"\nfi\n\n# --- 2. DEFINE INPUTS ---\n\nif [ -f \"${BASE_DIR}/current_background.mp4\" ]; then\n    VIDEO_BG=\"${BASE_DIR}/current_background.mp4\"\nelse\n    RAND_BG=$(find \"$GAMEPLAY_DIR\" -type f \\( -name \"*.mp4\" -o -name \"*.webm\" -o -name \"*.mkv\" \\) 2>/dev/null | shuf -n 1)\n    if [ -n \"$RAND_BG\" ]; then\n        echo \"Found new random background: $RAND_BG\" >&2\n        VIDEO_BG=\"$RAND_BG\"\n    else\n        echo \"No gameplay found. Using static default.\" >&2\n        VIDEO_BG=\"${BASE_DIR}/background.webm\"\n    fi\nfi\n\n# --- UPDATED: USE SINGLE AUDIO FILE ---\nAUDIO_FINAL=\"${BASE_DIR}/final_audio.mp3\" \n\nIMAGES_LIST=\"${BASE_DIR}/images_list.txt\"\nSUBS_FINAL=\"${BASE_DIR}/final_subs.vtt\"\nVFX_MAP=\"${BASE_DIR}/vfx_map.csv\"\n\necho \"Rendering using Background: $VIDEO_BG\" >&2\necho \"Using Audio: $AUDIO_FINAL\" >&2\n\n# --- 3. BUILD VFX FILTER CHAIN ---\nVFX_CHAIN=\"\"\nif [ -f \"$VFX_MAP\" ]; then\n    echo \"Processing VFX Map...\" >&2\n    while IFS=, read -r tag start_ms end_ms || [ -n \"$tag\" ]; do\n        tag=$(echo \"$tag\" | tr -d '[:space:]')\n        start_ms=$(echo \"$start_ms\" | tr -d '[:space:]')\n        end_ms=$(echo \"$end_ms\" | tr -d '[:space:]')\n\n        START_SEC=$(awk \"BEGIN {print $start_ms/1000}\")\n        END_SEC=$(awk \"BEGIN {print $end_ms/1000}\")\n\n        case \"$tag\" in\n            \"RED\") FILTER=\"eq=gamma_r=2:gamma_g=0.6:gamma_b=0.6:saturation=1.3:enable='between(t,$START_SEC,$END_SEC)'\" ;;\n            \"GLITCH\") FILTER=\"noise=alls=100:allf=t+u:enable='between(t,$START_SEC,$END_SEC)',rgbashift=rh=10:bv=10:enable='between(t,$START_SEC,$END_SEC)'\" ;;\n            \"SHAKE\") FILTER=\"rgbashift=rh=-10:bv=10:gh=0:edge=wrap:enable='between(t,$START_SEC,$END_SEC)'\" ;;\n            \"ZOOM\") FILTER=\"vignette=enable='between(t,$START_SEC,$END_SEC)'\" ;;\n            *) FILTER=\"\" ;;\n        esac\n\n        if [ -n \"$FILTER\" ]; then\n            if [ -z \"$VFX_CHAIN\" ]; then VFX_CHAIN=\"$FILTER\"; else VFX_CHAIN=\"$VFX_CHAIN, $FILTER\"; fi\n        fi\n    done < \"$VFX_MAP\"\nelse\n    echo \"No VFX Map found. Skipping effects.\" >&2\nfi\n\nif [ -z \"$VFX_CHAIN\" ]; then VFX_CHAIN=\"null\"; fi\n\n# --- 4. SMART ANTI-FLAG LOGIC ---\nBG_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"$VIDEO_BG\" | awk '{print int($1)}')\nMAX_START=$((BG_DURATION - 90))\n\nif [ \"$MAX_START\" -gt 0 ]; then RANDOM_START=$(shuf -i 0-\"$MAX_START\" -n 1); else RANDOM_START=0; fi\n\nDO_FLIP=$(shuf -i 0-1 -n 1)\nif [ \"$DO_FLIP\" -eq 1 ]; then FLIP_FILTER=\", hflip\"; else FLIP_FILTER=\"\"; fi\n\nrm -f \"$OUTPUT_FILE\"\n\n# --- 5. RENDER VIDEO (OPTIMIZED) ---\n\nif [ -n \"$TEST_DURATION\" ]; then\n    TIME_LIMIT=\"-t $TEST_DURATION\"\n    echo \"!!! TEST MODE ENABLED !!!\" >&2\nelse\n    TIME_LIMIT=\"\"\nfi\n\n# CHANGELOG:\n# 1. Replaced '-f concat ...' with simple '-i \"$AUDIO_FINAL\"'\n# 2. Kept '-r 30' and '-threads 3' for VPS optimization\n\nffmpeg -y -hide_banner -loglevel error \\\n-ss \"$RANDOM_START\" \\\n-stream_loop -1 -i \"$VIDEO_BG\" \\\n-i \"$AUDIO_FINAL\" \\\n-f concat -safe 0 -i \"$IMAGES_LIST\" \\\n-filter_complex \"\n    [0:v]scale=-2:1920:flags=fast_bilinear,crop=1080:1920${FLIP_FILTER}[bg]; \\\n    [2:v]scale=2000:-2:flags=fast_bilinear[avatar]; \\\n    [bg][avatar]overlay=x='(W-w)/2-150':y=H-h[v_raw]; \\\n    [v_raw]${VFX_CHAIN}[v_vfx]; \\\n    [v_vfx]subtitles='$SUBS_FINAL':force_style='FontName=Komika Axis,FontSize=20,Alignment=2,MarginV=65'[v_out]\n\" \\\n-map \"[v_out]\" -map 1:a \\\n-c:v libx264 -preset ultrafast -tune fastdecode -crf 28 \\\n-r 30 \\\n-threads 3 \\\n-pix_fmt yuv420p \\\n-c:a aac -b:a 128k \\\n-shortest \\\n$TIME_LIMIT \\\n\"$OUTPUT_FILE\"\n\n# --- 6. OUTPUT ---\necho \"$OUTPUT_FILE\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [2080, 800],
+            "id": "332bfc8a-5450-4ce1-9527-488d92be4ac9",
+            "name": "Render Video"
+        },
+        {
+            "parameters": {
+                "command": "=# 1. SETUP PATHS\nBASE_DIR=\"/tmp_media/PERSONA/Videos\"\nSUBS_FILE=\"${BASE_DIR}/final_subs.vtt\"\n\n# 2. WRITE THE SPLITTER SCRIPT\ncat <<EOF > \"${BASE_DIR}/split_vtt.py\"\nimport re\nimport math\nimport sys\nimport os\n\n# --- CONFIGURATION ---\nFILENAME = \"${SUBS_FILE}\"\nWORDS_PER_BLOCK = 2 \nBUFFER_MS = 0       # Gap between subs to prevent flicker\nTIME_OFFSET_MS = -650 # <--- ADJUST THIS: Negative = Earlier, Positive = Later\n\ndef parse_time(t):\n    t = t.replace(',', '.')\n    parts = t.strip().split(':')\n    if len(parts) == 2:\n        h, m, s_ms = 0, int(parts[0]), parts[1]\n    elif len(parts) == 3:\n        h, m, s_ms = int(parts[0]), int(parts[1]), parts[2]\n    else: return 0\n\n    if '.' in s_ms: \n        s, ms = s_ms.split('.')\n        if len(ms) > 3: ms = ms[:3]\n    else: \n        s, ms = s_ms, 0\n    return h * 3600000 + m * 60000 + int(s) * 1000 + int(ms)\n\ndef format_time(ms):\n    h, r = divmod(ms, 3600000)\n    m, r = divmod(r, 60000)\n    s, ms = divmod(r, 1000)\n    return f\"{h:02}:{m:02}:{s:02}.{ms:03}\"\n\ndef clean_text(text):\n    text = text.upper()\n    text = re.sub(r'[^\\w\\s\\']', '', text)\n    return text\n\ntry:\n    with open(FILENAME, 'r') as f:\n        lines = f.readlines()\nexcept FileNotFoundError:\n    print(f\"Error: File {FILENAME} not found.\")\n    sys.exit(1)\n\noutput = [\"WEBVTT\\n\\n\"]\ni = 0\n\nwhile i < len(lines):\n    line = lines[i].strip()\n    \n    if '-->' in line:\n        try:\n            times = line.split(' --> ')\n            \n            # PARSE RAW TIMES\n            raw_start = parse_time(times[0])\n            raw_end = parse_time(times[1])\n            \n            # APPLY OFFSET\n            start_ms = raw_start + TIME_OFFSET_MS\n            end_ms = raw_end + TIME_OFFSET_MS\n            \n            # Safety Checks\n            if start_ms < 0: start_ms = 0\n            if end_ms <= start_ms: end_ms = start_ms + 100\n            \n            duration = end_ms - start_ms\n            \n            text_line_index = i + 1\n            if text_line_index < len(lines):\n                raw_text = lines[text_line_index].strip()\n                clean_line = clean_text(raw_text)\n                words = clean_line.split()\n            else:\n                words = []\n            \n            if not words: \n                i+=1; continue\n\n            # SPLIT LOGIC\n            chunk_size = WORDS_PER_BLOCK\n            chunks = [words[j:j + chunk_size] for j in range(0, len(words), chunk_size)]\n            \n            if len(chunks) == 0:\n                time_per_chunk = 0\n            else:\n                time_per_chunk = duration / len(chunks)\n            \n            curr = start_ms\n            for chunk in chunks:\n                math_end = curr + time_per_chunk\n                visual_end = math_end - BUFFER_MS\n                \n                if visual_end <= curr: visual_end = math_end - 1\n                \n                output.append(f\"{format_time(int(curr))} --> {format_time(int(visual_end))}\\n\")\n                output.append(\" \".join(chunk) + \"\\n\\n\")\n                \n                curr = math_end\n            \n            i += 2\n        except Exception as e:\n            print(f\"Error parsing line {i}: {e}\")\n            i += 1\n    else:\n        if line and not line.isdigit() and \"WEBVTT\" not in line:\n             pass\n        i += 1\n\nwith open(FILENAME, 'w') as f:\n    f.writelines(output)\n\nprint(f\"Successfully split subtitles in: {FILENAME}\")\nEOF\n\n# 3. RUN THE SCRIPT\npython3 \"${BASE_DIR}/split_vtt.py\"\n\n# 4. FIX PERMISSIONS\nchmod 666 \"${SUBS_FILE}\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [1856, 800],
+            "id": "5652e421-c4f1-4406-bfd3-951957c6d346",
+            "name": "Split Caption"
+        },
+        {
+            "parameters": {
+                "jsCode": "// --- HELPER FUNCTIONS ---\nfunction unescapeHTML(str) {\n    if (!str) return \"\";\n    return str\n        .replace(/&lt;/g, \"<\")\n        .replace(/&gt;/g, \">\")\n        .replace(/&quot;/g, '\"')\n        .replace(/&amp;/g, \"&\")\n        .replace(/&#39;/g, \"'\")\n        .replace(/&nbsp;/g, \" \");\n}\n\nfunction removeTags(str) {\n    if (!str) return \"\";\n    return str.replace(/<[^>]*>?/gm, '');\n}\n\n// --- MAIN LOGIC ---\nconst allEntries = [];\nconst subredditItems = $input.all(); // Get ALL items, not just the first one\n\n// Loop through every Subreddit in the list\nfor (const item of subredditItems) {\n    const xmlData = item.json.data;\n\n    // Safety check: if the RSS feed failed or is empty, skip it\n    if (!xmlData || typeof xmlData !== 'string') continue;\n\n    const entryRegex = /<entry>([\\s\\S]*?)<\\/entry>/g;\n    let match;\n\n    while ((match = entryRegex.exec(xmlData)) !== null) {\n        const entryBlock = match[1];\n\n        const titleMatch = entryBlock.match(/<title>(.*?)<\\/title>/);\n        const title = titleMatch ? titleMatch[1] : \"Unknown Title\";\n\n        const authorMatch = entryBlock.match(/<name>(.*?)<\\/name>/);\n        const author = authorMatch ? authorMatch[1] : \"Unknown Author\";\n\n        const linkMatch = entryBlock.match(/<link href=\"(.*?)\"/);\n        const link = linkMatch ? linkMatch[1] : \"\";\n\n        const contentMatch = entryBlock.match(/<content type=\"html\">([\\s\\S]*?)<\\/content>/);\n        let rawContent = contentMatch ? contentMatch[1] : \"\";\n        \n        let cleanStory = unescapeHTML(rawContent);\n        cleanStory = unescapeHTML(cleanStory);\n        cleanStory = cleanStory.split(\"submitted by\")[0];\n        cleanStory = removeTags(cleanStory).trim();\n\n        // FILTER: Keep stories longer than 500 chars\n        if (cleanStory.length > 500) {\n            allEntries.push({\n                json: {\n                    title: title,\n                    author: author,\n                    link: link,\n                    story_text: cleanStory\n                }\n            });\n        }\n    }\n}\n\nreturn allEntries;"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-3232, 672],
+            "id": "93dce3a7-8f75-45d7-8939-b20227ae460e",
+            "name": "Format Story"
+        },
+        {
+            "parameters": {
+                "url": "={{ $json.url }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "User-Agent",
+                            "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.3,
+            "position": [-3456, 672],
+            "id": "07188ffc-d4ab-4c44-b912-23a9ad2e909e",
+            "name": "Reddit RSS",
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "jsCode": "// 1. Get the output from Groq (Basic LLM Chain)\nconst groqResponse = $input.first().json;\n\n// 2. Extract the script text\nlet cleanScript = groqResponse.text;\n\n// 3. CLEANING & FAIL-SAFE\nif (cleanScript) {\n    // --- FAIL SAFE: REMOVE AI HEADERS ---\n    \n    // Remove Markdown Bold (**text**) -> text\n    cleanScript = cleanScript.replace(/\\*\\*(.*?)\\*\\*/g, '$1');\n\n    // Remove lines like \"PART 1: THE HOOK\" or \"STEP 1\"\n    cleanScript = cleanScript.replace(/^(###\\s*)?(PART|STEP)\\s+\\d+:?.*$/gim, \"\");\n\n    // Remove lines like \"THE HOOK:\" or \"THE STORY:\"\n    cleanScript = cleanScript.replace(/^(###\\s*)?(THE\\s+HOOK|THE\\s+STORY):?.*$/gim, \"\");\n\n    // --- STANDARD CLEANING ---\n    \n    // Replace newlines (\\n) with a space so words don't stick together\n    cleanScript = cleanScript.replace(/\\n/g, \" \");\n    \n    // Remove double spaces created by the deletion of headers\n    cleanScript = cleanScript.replace(/\\s+/g, \" \").trim();\n}\n\n// 4. Retrieve the Story Title & TRUNCATE IT\nlet title = \"Horror_Story\"; // Fallback\ntry {\n    // We are grabbing the title from the node that selected the story\n    title = $(\"Get Selected Story\").first().json.winner.title;\n\n    // --- CRITICAL FIX: TRIM TITLE LENGTH ---\n    // If title exists and is longer than 50 characters, cut it.\n    if (title && title.length > 50) {\n        title = title.substring(0, 50);\n    }\n\n} catch (e) {\n    console.log(\"Warning: Could not find title. Check the node name in the code.\");\n}\n\n// 5. Output the Clean JSON\nreturn {\n    json: {\n        title: title,\n        script: cleanScript\n    }\n};"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-288, 752],
+            "id": "1e06399a-7576-4553-8283-93d85bbbf896",
+            "name": "Format Groq"
+        },
+        {
+            "parameters": {
+                "model": "llama-3.3-70b-versatile",
+                "options": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+            "typeVersion": 1,
+            "position": [-784, 848],
+            "id": "3b4639fc-7744-4808-95f6-3f058623fa82",
+            "name": "Groq Chat Model",
+            "alwaysOutputData": false,
+            "credentials": {
+                "groqApi": {
+                    "id": "GJ11w5G3QtKLwmqM",
+                    "name": "Groq account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": "=You are [INSERT PERSONA NAME], a [INSERT ROLE] for a [INSERT NICHE] channel.\n**THE GIMMICK:** [DESCRIBE YOUR NARRATOR'S PERSONALITY e.g., Sarcastic Robot, Hyper-Energetic Gamer, Calm Historian].\n\n**YOUR GOAL:** Rewrite the provided content into a 60-90 second script in [INSERT LANGUAGE].\n\n### STEP 1: SELECT THE HOOK (Internal Logic)\nAnalyze the story's tone and choose ONE hook (Do not output the logic, just use the line):\n- OPTION 1: \"[INSERT HOOK LINE 1]\"\n- OPTION 2: \"[INSERT HOOK LINE 2]\"\n- OPTION 3: \"[INSERT HOOK LINE 3]\"\n\n### STEP 2: EDITING & PACING RULES (CRITICAL)\n- **PACING:** [INSERT PACING INSTRUCTIONS e.g., Fast, Slow, Chaotic].\n- **TAG FREQUENCY:** Insert an Emotion, SFX, or VFX tag every [X] words.\n- **TAG LIST (Must match your filenames in media/SFX/):**\n  - **Audio:** [SFX:NAME_1], [SFX:NAME_2], [SFX:NAME_3]\n  - **Visual:** [VFX:ZOOM], [VFX:SHAKE], [VFX:GLITCH], [VFX:RED]\n\n### STEP 3: VOCABULARY & STYLE\n- \"[Standard Term]\" -> \"[Your Persona's Slang/Term]\"\n- \"[Standard Term]\" -> \"[Your Persona's Slang/Term]\"\n- \"[Standard Term]\" -> \"[Your Persona's Slang/Term]\"\n\n### STEP 4: PERSPECTIVE\n- Narrate in [FIRST/THIRD] person.\n- Refer to the protagonist as: \"[INSERT TERMS e.g., The Hero, The Victim, I]\".\n\n### CRITICAL OUTPUT RULES:\n1. **NO INTROS.** Start immediately with the first tag.\n2. **NO MARKDOWN.** Do not use bold (**text**).\n3. **FORMAT:** [TAG] Text text text [TAG] Text text [TAG] Text.\n\nInput Story Title: {{ $('Get Selected Story').item.json.winner.title }}\nInput Story Text: {{ $('Get Selected Story').item.json.winner.text }}\n\nOutput ONLY the raw script text.",
+                "batching": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.chainLlm",
+            "typeVersion": 1.8,
+            "position": [-864, 624],
+            "id": "ba29f9a2-1f34-4949-95ac-0f30cdbfd79d",
+            "name": "Generate Script Groq",
+            "alwaysOutputData": true,
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "model": "llama-3.1-8b-instant",
+                "options": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+            "typeVersion": 1,
+            "position": [-2256, 768],
+            "id": "b08590ca-9316-40fc-a2a4-187a4149d510",
+            "name": "Groq Chat Model1",
+            "alwaysOutputData": false,
+            "credentials": {
+                "groqApi": {
+                    "id": "GJ11w5G3QtKLwmqM",
+                    "name": "Groq account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": "=You are a Content Curator for [INSERT YOUR NICHE/TOPIC].\nYour goal is to separate high-quality content from spam/irrelevant posts.\n\nAnalyze the list of items below (each has an ID).\nClassify them based on these STRICT rules:\n\n1. **THE WINNER (Select 1):** The single best story/post based on these criteria:\n   - [INSERT CRITERIA 1 - e.g., High engagement potential]\n   - [INSERT CRITERIA 2 - e.g., Clear narrative structure]\n   - [INSERT CRITERIA 3 - e.g., Avoids walls of text]\n\n2. **THE TRASH (Blacklist):** Content that must be blocked/removed forever.\n   - [INSERT EXCLUSION 1 - e.g., Off-topic posts]\n   - [INSERT EXCLUSION 2 - e.g., Politics/Spam]\n   - [INSERT EXCLUSION 3 - e.g., Low word count]\n\n3. **THE RESERVES (Ignore):** Decent content that didn't win today. Do NOT list these in \"trash\". We keep them for future cycles.\n\n**CRITICAL OUTPUT RULES:**\n- Return ONLY raw JSON. No Markdown (```json).\n- Format:\n{\n  \"selected_index\": 3,  // The ID number of the winner (Integer) or null\n  \"trash_indices\": [0, 4, 7] // List of ID numbers to blacklist (Integers)\n}\n\n**CONTENT LIST:**\n{{ \n$input.all().map((item, index) => \n  `[ID: ${index}]\n   Title: ${item.json.title}\n   Preview: ${item.json.story_text.substring(0, 350)}...`\n).join('\\n\\n----------------\\n\\n') \n}}",
+                "batching": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.chainLlm",
+            "typeVersion": 1.8,
+            "position": [-2336, 544],
+            "id": "32d399eb-57e3-421c-b564-8bbee70e1d13",
+            "name": "Select Story Groq",
+            "executeOnce": true,
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "command": "=# --- 1. SETUP TITLES & DIRECTORIES ---\nRAW_TITLE=\"{{ $('Format Groq').item.json.title }}\"\nCLEAN_TITLE=$(echo \"$RAW_TITLE\" | sed 's/[^a-zA-Z0-9]/_/g' | tr -s '_')\n\n# Define paths\nBASE_DIR=\"/tmp_media/PERSONA/Videos\"\nPERSONA_DIR=\"/tmp_media/PERSONA/Persona\"\nSFX_DIR=\"/tmp_media/SFX\"\nMUSIC_DIR=\"/tmp_media/Music\"\nGAMEPLAY_DIR=\"/tmp_media/Gameplay\"\n\nmkdir -p \"$BASE_DIR\"\nmkdir -p \"$PERSONA_DIR\"\nmkdir -p \"$SFX_DIR\"\nmkdir -p \"$MUSIC_DIR\"\nmkdir -p \"$GAMEPLAY_DIR\"\n\n# --- RANDOM BACKGROUND SELECTION ---\n# Find all video files (mp4, webm, mkv) in the Gameplay folder\n# shuf -n 1 picks one at random\nSELECTED_BG=$(find \"$GAMEPLAY_DIR\" -type f \\( -name \"*.mp4\" -o -name \"*.webm\" -o -name \"*.mkv\" \\) 2>/dev/null | shuf -n 1)\n\n# Fallback if no gameplay found (Safety Check)\nif [ -z \"$SELECTED_BG\" ]; then\n    echo \"WARNING: No gameplay found in $GAMEPLAY_DIR. Using default background.\"\n    # Ensure a default exists or copy one manually if needed\n    if [ -f \"${BASE_DIR}/background.webm\" ]; then\n        SELECTED_BG=\"${BASE_DIR}/background.webm\"\n    else\n        echo \"ERROR: No default background found at ${BASE_DIR}/background.webm\"\n        # Create a dummy file just to prevent immediate crash, though render will fail later\n        touch \"${BASE_DIR}/background.webm\"\n        SELECTED_BG=\"${BASE_DIR}/background.webm\"\n    fi\nfi\n\n# Copy selection to a standard path so the Render Node always knows where to look\ncp \"$SELECTED_BG\" \"${BASE_DIR}/current_background.mp4\"\n\n# Save script text\ncat <<EOF > \"${BASE_DIR}/script.txt\"\n{{ $('Format Groq').item.json.script }}\nEOF\n\necho \"Setup Complete. Selected Background: $SELECTED_BG\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [960, 800],
+            "id": "4f0f5026-7e3e-4b66-ad19-e4a80cfd7c8a",
+            "name": "Setup Directories & Variables"
+        },
+        {
+            "parameters": {
+                "command": "=# --- CONFIGURATION ---\nBASE_DIR=\"/tmp_media/PERSONA/Videos\"\nPERSONA_DIR=\"/tmp_media/PERSONA/Persona\"\nSFX_DIR=\"/tmp_media/SFX\"\nMUSIC_DIR=\"/tmp_media/Music\"\n\n# WRITE THE OPTIMIZED PYTHON SCRIPT\ncat <<EOF > \"${BASE_DIR}/generate_dynamic_video.py\"\nimport re\nimport subprocess\nimport os\nimport sys\nimport random\nimport traceback\nimport concurrent.futures\nimport json\nimport urllib.request\nimport base64\n\n# --- PYTHON CONFIG ---\nPERSONA_DIR = \"${PERSONA_DIR}\"\nSFX_DIR = \"${SFX_DIR}\"\nMUSIC_DIR = \"${MUSIC_DIR}\"\nOUTPUT_DIR = \"${BASE_DIR}\"\n\n# --- KOKORO SETTINGS ---\nKOKORO_URL = \"http://kokoro-tts:8880/v1/audio/speech\"\nKOKORO_VOICE = \"pm_santa(0.8)+am_onyx(0.1)\"\nKOKORO_SPEED = 1.3       # Speed BEFORE pitch shift (make it faster if pitch shift slows it down too much)\nPITCH_SHIFT = \"0.9\"       # 1.0 = Normal, 0.9 = Deep, 0.8 = Demon (affects speed too)\n\nSFX_MAX_DURATION = 1.5\nSFX_VOLUME = 0.18\n\n# --- HELPER FUNCTIONS ---\ndef get_duration_ms(filepath):\n    try:\n        res = subprocess.run([\"ffprobe\", \"-v\", \"error\", \"-show_entries\", \"format=duration\", \"-of\", \"default=noprint_wrappers=1:nokey=1\", filepath], capture_output=True, text=True)\n        return int(float(res.stdout.strip()) * 1000)\n    except:\n        return 500\n\ndef fmt_vtt(ms):\n    h, r = divmod(ms, 3600000)\n    m, r = divmod(r, 60000)\n    s, ms = divmod(r, 1000)\n    return f\"{h:02}:{m:02}:{s:02}.{ms:03}\"\n\ndef process_segment(job):\n    \"\"\"\n    Worker function to generate audio files in parallel.\n    \"\"\"\n    i = job['id']\n    tag = job['tag']\n    text = job['text']\n    segment_id = f\"seg_{i}\"\n    \n    results = [] \n\n    is_vfx = tag.startswith(\"VFX:\")\n    is_sfx = tag.startswith(\"SFX:\")\n    \n    # 1. HANDLE SFX GENERATION\n    if is_sfx:\n        sfx_name = tag.split(\":\")[1].strip().lower()\n        sfx_file_wav = f\"{OUTPUT_DIR}/{segment_id}_sfx.wav\"\n        source_sfx = f\"{SFX_DIR}/{sfx_name}.mp3\"\n        \n        # Generate/Convert SFX\n        if os.path.exists(source_sfx):\n            filter_chain = (f\"volume={SFX_VOLUME},areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=-50dB,areverse,afade=t=out:st={SFX_MAX_DURATION-0.2}:d=0.2\")\n            subprocess.run([\"ffmpeg\", \"-y\", \"-v\", \"error\", \"-nostats\", \"-i\", source_sfx, \"-af\", filter_chain, \"-t\", str(SFX_MAX_DURATION), \"-ar\", \"44100\", \"-ac\", \"1\", \"-c:a\", \"pcm_s16le\", sfx_file_wav], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n        else:\n            subprocess.run([\"ffmpeg\", \"-f\", \"lavfi\", \"-i\", \"anullsrc=r=44100:cl=mono\", \"-t\", \"0.2\", \"-c:a\", \"pcm_s16le\", sfx_file_wav, \"-y\", \"-v\", \"error\", \"-nostats\"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n        \n        results.append({\n            'type': 'audio',\n            'file': sfx_file_wav,\n            'duration': get_duration_ms(sfx_file_wav),\n            'img': job['emotion'] \n        })\n\n    # 2. HANDLE TTS GENERATION (KOKORO LOCAL)\n    has_letters = bool(re.search(r'[a-zA-Z0-9]', text))\n    if has_letters:\n        temp_mp3 = f\"{OUTPUT_DIR}/{segment_id}_temp.mp3\"\n        tts_file_wav = f\"{OUTPUT_DIR}/{segment_id}_tts.wav\"\n\n        try:\n            # Prepare JSON Payload\n            data = {\n                \"model\": \"kokoro\",\n                \"input\": text,\n                \"voice\": KOKORO_VOICE,\n                \"speed\": KOKORO_SPEED,\n                \"response_format\": \"mp3\"\n            }\n            \n            # Send Request to Local Container\n            req = urllib.request.Request(\n                KOKORO_URL, \n                json.dumps(data).encode(\"utf-8\"), \n                {\"Content-Type\": \"application/json\"}\n            )\n            \n            # Write Response to File\n            with urllib.request.urlopen(req) as response:\n                with open(temp_mp3, \"wb\") as f:\n                    f.write(response.read())\n\n            # Convert to WAV with PITCH SHIFT\n            # asetrate changes pitch (and speed), atempo fixes the speed back\n            filter_complex = f\"asetrate=24000*{PITCH_SHIFT},atempo=1/{PITCH_SHIFT},aresample=44100\"\n            \n            subprocess.run([\n                \"ffmpeg\", \"-y\", \"-v\", \"error\", \"-nostats\", \n                \"-i\", temp_mp3, \n                \"-af\", filter_complex, \n                \"-ar\", \"44100\", \"-ac\", \"1\", \"-c:a\", \"pcm_s16le\", \n                tts_file_wav\n            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n            \n            if os.path.exists(temp_mp3): os.remove(temp_mp3)\n            \n            # GENERATE MANUAL VTT\n            duration_ms = get_duration_ms(tts_file_wav)\n            vtt_start = \"00:00:00.000\"\n            vtt_end = fmt_vtt(duration_ms)\n            fake_vtt_content = [f\"{vtt_start} --> {vtt_end}\\n\", f\"{text}\\n\"]\n\n            results.append({\n                'type': 'tts',\n                'file': tts_file_wav,\n                'duration': duration_ms,\n                'img': job['emotion'],\n                'vtt_lines': fake_vtt_content,\n                'vfx_to_apply': job.get('pending_vfx')\n            })\n            \n        except Exception as e:\n            print(f\"Error in TTS {i}: {e}\")\n            if \"Connection refused\" in str(e):\n                print(\"CRITICAL: Could not connect to Kokoro. Is the docker container running?\")\n\n    return {'id': i, 'items': results}\n\n\n# --- MAIN EXECUTION ---\ntry:\n    script_path = f\"{OUTPUT_DIR}/script.txt\"\n    if not os.path.exists(script_path):\n        print(f\"ERROR: Script file not found at {script_path}\")\n        sys.exit(1)\n\n    with open(script_path, \"r\") as f:\n        full_text = f.read()\n\n    if not full_text.strip().startswith(\"[\"):\n        full_text = \"[NEUTRAL] \" + full_text\n        \n    # --- MUSIC SELECTION ---\n    if os.path.exists(MUSIC_DIR):\n        music_files = [f for f in os.listdir(MUSIC_DIR) if f.lower().endswith('.mp3')]\n        if music_files:\n            bg_music_path = os.path.join(MUSIC_DIR, random.choice(music_files))\n            try:\n                res = subprocess.run([\"ffprobe\", \"-v\", \"error\", \"-show_entries\", \"format=duration\", \"-of\", \"default=noprint_wrappers=1:nokey=1\", bg_music_path], capture_output=True, text=True)\n                dur = float(res.stdout.strip())\n                start = random.uniform(0, max(0, dur - 90))\n                with open(f\"{OUTPUT_DIR}/music_path.txt\", \"w\") as f: f.write(bg_music_path)\n                with open(f\"{OUTPUT_DIR}/music_start.txt\", \"w\") as f: f.write(str(start))\n            except: pass\n\n    # --- JOB PREPARATION ---\n    segments = re.split(r'\\[(NEUTRAL|SCARED|EVIL|SUSPICIOUS|LAUGHING|SFX:\\s*[A-Z_]+|VFX:\\s*[A-Z_]+)\\]', full_text, flags=re.IGNORECASE)\n    \n    jobs = []\n    last_valid_emotion = \"neutral\"\n    pending_vfx = None\n\n    for i in range(1, len(segments), 2):\n        tag = segments[i].upper().strip()\n        text = segments[i+1].strip()\n        \n        is_vfx = tag.startswith(\"VFX:\")\n        is_sfx = tag.startswith(\"SFX:\")\n        is_emotion = not (is_vfx or is_sfx)\n\n        if is_emotion: last_valid_emotion = tag.lower()\n        if is_vfx: pending_vfx = tag.split(\":\")[1].strip()\n\n        jobs.append({\n            'id': i,\n            'tag': tag,\n            'text': text,\n            'emotion': last_valid_emotion,\n            'pending_vfx': pending_vfx \n        })\n        \n        if pending_vfx and bool(re.search(r'[a-zA-Z0-9]', text)):\n            pending_vfx = None\n\n    # --- PARALLEL EXECUTION ---\n    print(f\"Starting parallel generation with {len(jobs)} segments...\")\n    \n    processed_segments = []\n    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:\n        futures = {executor.submit(process_segment, job): job for job in jobs}\n        for future in concurrent.futures.as_completed(futures):\n            try:\n                res = future.result()\n                processed_segments.append(res)\n            except Exception as e:\n                print(f\"Worker failed: {e}\")\n                traceback.print_exc()\n\n    processed_segments.sort(key=lambda x: x['id'])\n\n    # --- TIMELINE ASSEMBLY ---\n    final_audio_files = []\n    concat_image_lines = []\n    combined_vtt_lines = [\"WEBVTT\\n\\n\"]\n    vfx_map_lines = [] \n    current_time_ms = 0\n    \n    for seg in processed_segments:\n        for item in seg['items']:\n            final_audio_files.append(item['file'])\n            \n            dur_sec = item['duration'] / 1000.0\n            img = f\"{PERSONA_DIR}/{item['img']}.png\"\n            if not os.path.exists(img): img = f\"{PERSONA_DIR}/neutral.png\"\n            concat_image_lines.append(f\"file '{img}'\")\n            concat_image_lines.append(f\"duration {dur_sec}\")\n            \n            if item.get('vfx_to_apply'):\n                vfx_map_lines.append(f\"{item['vfx_to_apply']},{current_time_ms},{current_time_ms + item['duration']}\\n\")\n\n            if item.get('vtt_lines'):\n                for line in item['vtt_lines']:\n                    if \"-->\" in line:\n                        start_str, end_str = line.strip().split(\" --> \")\n                        def parse_vtt(t):\n                            parts = t.replace(',',('.')).split(':')\n                            s_parts = parts[-1].split('.')\n                            h,m = (int(parts[0]), int(parts[1])) if len(parts)==3 else (0, int(parts[0]))\n                            s,ms = int(s_parts[0]), int(s_parts[1])\n                            return h*3600000 + m*60000 + s*1000 + ms\n                        \n                        new_start = fmt_vtt(parse_vtt(start_str) + current_time_ms)\n                        new_end = fmt_vtt(parse_vtt(end_str) + current_time_ms)\n                        combined_vtt_lines.append(f\"{new_start} --> {new_end}\\n\")\n                    elif line.strip() and \"WEBVTT\" not in line:\n                        combined_vtt_lines.append(line)\n\n            current_time_ms += item['duration']\n\n    # --- FINAL WRITES ---\n    silence_file_wav = f\"{OUTPUT_DIR}/silence_end.wav\"\n    subprocess.run([\"ffmpeg\", \"-f\", \"lavfi\", \"-i\", \"anullsrc=r=44100:cl=mono\", \"-t\", \"2\", \"-c:a\", \"pcm_s16le\", silence_file_wav, \"-y\", \"-v\", \"error\", \"-nostats\"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n    final_audio_files.append(silence_file_wav)\n    \n    if concat_image_lines:\n        concat_image_lines.append(concat_image_lines[-2])\n        concat_image_lines.append(\"duration 2\")\n\n    with open(f\"{OUTPUT_DIR}/audio_list.txt\", \"w\") as f:\n        for af in final_audio_files: f.write(f\"file '{af}'\\n\")\n\n    with open(f\"{OUTPUT_DIR}/images_list.txt\", \"w\") as f:\n        f.write(\"\\n\".join(concat_image_lines))\n\n    with open(f\"{OUTPUT_DIR}/final_subs.vtt\", \"w\") as f:\n        f.writelines(combined_vtt_lines)\n\n    with open(f\"{OUTPUT_DIR}/vfx_map.csv\", \"w\") as f:\n        f.writelines(vfx_map_lines)\n    \n    print(\"Python Generation Complete.\")\n\nexcept Exception as e:\n    print(\"PYTHON CRASHED:\")\n    traceback.print_exc()\n    sys.exit(1)\nEOF\n\n# EXECUTE PYTHON\npython3 \"${BASE_DIR}/generate_dynamic_video.py\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [1184, 800],
+            "id": "9220766b-7b8f-4935-937d-26d36e77be2b",
+            "name": "Generate Resources"
+        },
+        {
+            "parameters": {
+                "command": "BASE_DIR=\"/tmp_media/PERSONA/Videos\"\nMUSIC_VOLUME=\"1.0\"    # Slightly lowered music to make room for voice\nVOICE_VOLUME=\"4.0\"     # 3.0 = 300% volume (Boosts the quiet AI voice)\n\n# 1. CONCATENATE VOICE TRACK\nif [ -f \"${BASE_DIR}/audio_list.txt\" ]; then\n    ffmpeg -f concat -safe 0 -i \"${BASE_DIR}/audio_list.txt\" \\\n    -c:a pcm_s16le \"${BASE_DIR}/voice_track.wav\" \\\n    -y -v error -nostats > /dev/null 2>&1\nelse\n    echo \"CRITICAL ERROR: audio_list.txt was not generated.\"\n    exit 1\nfi\n\n# 2. CALCULATE EXACT DURATION\nVOICE_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"${BASE_DIR}/voice_track.wav\")\necho \"Voice Duration: $VOICE_DURATION seconds\"\n\n# 3. MIX BACKGROUND MUSIC WITH BOOSTED VOICE\nif [ -f \"${BASE_DIR}/music_path.txt\" ]; then\n    BG_MUSIC=$(cat \"${BASE_DIR}/music_path.txt\")\n    START_TIME=0\n    if [ -f \"${BASE_DIR}/music_start.txt\" ]; then START_TIME=$(cat \"${BASE_DIR}/music_start.txt\"); fi\n    \n    echo \"Mixing music with Boosted Voice & Ducking...\"\n    \n    # EXPLANATION OF CHANGES:\n    # [1:a]volume=${VOICE_VOLUME} -> We boost the voice IMMEDIATELY.\n    # We then split the boosted voice so it drives the sidechain (ducking) harder too.\n    \n    ffmpeg -ss \"$START_TIME\" -stream_loop -1 -i \"$BG_MUSIC\" -i \"${BASE_DIR}/voice_track.wav\" \\\n    -t \"$VOICE_DURATION\" \\\n    -filter_complex \"\n        [1:a]volume=${VOICE_VOLUME},asplit=2[sc][voice_out];\n        [0:a]volume=${MUSIC_VOLUME}[music];\n        [music][sc]sidechaincompress=threshold=0.05:ratio=2:attack=50:release=300[ducked_music];\n        [ducked_music][voice_out]amix=inputs=2:duration=shortest:dropout_transition=2[out]\n    \" \\\n    -map \"[out]\" -c:a libmp3lame -q:a 2 \"${BASE_DIR}/final_audio.mp3\" -y -v error -nostats > /dev/null 2>&1\n\nelse\n    echo \"No music found. Using boosted voice only.\"\n    # We still apply the volume boost even if there is no music\n    ffmpeg -i \"${BASE_DIR}/voice_track.wav\" -af \"volume=${VOICE_VOLUME}\" -c:a libmp3lame -q:a 2 \"${BASE_DIR}/final_audio.mp3\" -y -v error -nostats > /dev/null 2>&1\nfi\n\n# Cleanup\nrm \"${BASE_DIR}/voice_track.wav\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [1408, 800],
+            "id": "c2030b13-a9f5-45f9-aff9-f187bebee9b9",
+            "name": "Audio Mixing"
+        },
+        {
+            "parameters": {
+                "command": "BASE_DIR=\"/tmp_media/PERSONA/Videos\"\n\n# PERMISSIONS\n[ -f \"${BASE_DIR}/final_audio.mp3\" ] && chmod 666 \"${BASE_DIR}/final_audio.mp3\"\n[ -f \"${BASE_DIR}/final_subs.vtt\" ] && chmod 666 \"${BASE_DIR}/final_subs.vtt\"\n[ -f \"${BASE_DIR}/images_list.txt\" ] && chmod 666 \"${BASE_DIR}/images_list.txt\"\n[ -f \"${BASE_DIR}/vfx_map.csv\" ] && chmod 666 \"${BASE_DIR}/vfx_map.csv\"\n\n# CLEANUP\n# Keep final_audio, final_subs, images_list, vfx_map. Delete the rest.\n[ -f \"${BASE_DIR}/audio_list.txt\" ] && rm \"${BASE_DIR}/audio_list.txt\"\n[ -f \"${BASE_DIR}/voice_track.mp3\" ] && rm \"${BASE_DIR}/voice_track.mp3\"\n[ -f \"${BASE_DIR}/music_start.txt\" ] && rm \"${BASE_DIR}/music_start.txt\"\n[ -f \"${BASE_DIR}/music_path.txt\" ] && rm \"${BASE_DIR}/music_path.txt\"\nrm -f \"${BASE_DIR}\"/seg_*\n\necho \"Audio Generation & Cleanup Complete.\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [1632, 800],
+            "id": "8850145d-3d19-4a1d-85cb-52b31c47083f",
+            "name": "Cleanup & Permissions"
+        },
+        {
+            "parameters": {
+                "jsCode": "// 1. GRAB THE \"USED\" LIST FROM THE SHELL NODE\nlet usedFileContent = \"\";\n\ntry {\n    usedFileContent = $('Read Used Stories').first().json.stdout || \"\";\n} catch (error) {\n    usedFileContent = \"\";\n}\n\n// 2. CONVERT TO ARRAY\nconst usedTitles = usedFileContent\n    .split('\\n')\n    .map(line => line.trim().toLowerCase()) \n    .filter(line => line.length > 0);       \n\n// 3. FILTER AND LIMIT\n// We chain .slice(0, 10) at the very end\nreturn $(\"Format Story\").all()\n    .filter(item => {\n        const title = item.json.title;\n        \n        if (!title) return false;\n\n        const normalizedTitle = title.trim().toLowerCase();\n        \n        // Return true if title is NOT in the used list\n        return !usedTitles.includes(normalizedTitle);\n    })\n    .slice(0, 10); // <--- THIS CUTS THE LIST TO 10 ITEMS"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-2784, 672],
+            "id": "9c3998ac-08c6-4d79-9418-909fac35f06d",
+            "name": "Filter Used Stories",
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "command": "BASE_DIR=\"/tmp_media/PERSONA\"\nTRACKING_FILE=\"${BASE_DIR}/used_stories.txt\"\n\n# 1. Create the file if it doesn't exist (prevents crashes)\nif [ ! -f \"$TRACKING_FILE\" ]; then\n    mkdir -p \"$BASE_DIR\"\n    touch \"$TRACKING_FILE\"\nfi\n\n# 2. Output the file content\ncat \"$TRACKING_FILE\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [-3008, 672],
+            "id": "b7362178-ec15-4934-a122-b3a6d87bde05",
+            "name": "Read Used Stories"
+        },
+        {
+            "parameters": {
+                "command": "=BASE_DIR=\"/tmp_media/PERSONA\"\nTRACKING_FILE=\"${BASE_DIR}/used_stories.txt\"\n\n# Get the title from the workflow context\nTITLE=\"{{ $('Get Selected Story').item.json.winner.title }}\"\n\n# Clean formatting and append to file\necho \"$TITLE\" | sed 's/^[ \\t]*//;s/[ \\t]*$//' >> \"$TRACKING_FILE\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [2304, 800],
+            "id": "84ed0ee6-bd80-4c0f-b6b1-341be0031017",
+            "name": "Save Used Title"
+        },
+        {
+            "parameters": {
+                "fileSelector": "={{ $('Render Video').item.json.stdout }}",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.readWriteFile",
+            "typeVersion": 1.1,
+            "position": [3424, 800],
+            "id": "f438b9e6-8e25-4dc9-a613-7f9f2b7c49d2",
+            "name": "Read Video File"
+        },
+        {
+            "parameters": {
+                "resource": "folder",
+                "name": "={{ $today.toFormat('yyyy-MM-dd') }}",
+                "driveId": {
+                    "__rl": true,
+                    "value": "17drDNnMuYXFJMZv6WrylRIw2HQ8O5mXr",
+                    "mode": "id"
+                },
+                "folderId": {
+                    "__rl": true,
+                    "mode": "list",
+                    "value": "root",
+                    "cachedResultName": "/ (Root folder)"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.googleDrive",
+            "typeVersion": 3,
+            "position": [2976, 864],
+            "id": "5adda463-282b-4494-b1d6-5faf10c9d888",
+            "name": "Create Daily Folder",
+            "credentials": {
+                "googleDriveOAuth2Api": {
+                    "id": "I74aMvSYuoFp8mrV",
+                    "name": "Google Drive account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "resource": "fileFolder",
+                "queryString": "={{ $today.toFormat('yyyy-MM-dd') }}",
+                "filter": {
+                    "driveId": {
+                        "mode": "list",
+                        "value": "My Drive"
+                    },
+                    "folderId": {
+                        "__rl": true,
+                        "value": "17drDNnMuYXFJMZv6WrylRIw2HQ8O5mXr",
+                        "mode": "id"
+                    },
+                    "whatToSearch": "folders",
+                    "includeTrashed": false
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.googleDrive",
+            "typeVersion": 3,
+            "position": [2528, 800],
+            "id": "37631df7-276a-489a-ad90-dc9617a497ba",
+            "name": "Google Drive Search",
+            "alwaysOutputData": true,
+            "credentials": {
+                "googleDriveOAuth2Api": {
+                    "id": "I74aMvSYuoFp8mrV",
+                    "name": "Google Drive account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "d2c7a9e1-70f6-4150-9b29-1ecb6caa7ec8",
+                            "leftValue": "={{ $json.id }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "notEmpty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [2752, 800],
+            "id": "f1cf2e09-06de-4eec-9b42-c265d42be1b4",
+            "name": "If Folder Exists"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "c32b5392-ee91-4685-bf6a-f29ca4bbb467",
+                            "leftValue": "={{ $json.text }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "empty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-1984, 544],
+            "id": "ff74a50c-859b-4095-9444-5d407c110cea",
+            "name": "If Rate Limited"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "c32b5392-ee91-4685-bf6a-f29ca4bbb467",
+                            "leftValue": "={{ $json.text }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "empty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-512, 624],
+            "id": "aaf8bf5b-cb4a-4807-9a7a-d990dd09da72",
+            "name": "If Rate Limited1"
+        },
+        {
+            "parameters": {
+                "jsCode": "const subreddits = [\n  // POPULATE THIS\n];\n\n// N8N will run the next nodes once for EACH url in this list\nreturn subreddits.map(url => ({ json: { url } }));"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-3680, 672],
+            "id": "024ad218-be44-47bd-b3f5-9dcbeb2d6198",
+            "name": "Subreddits"
+        },
+        {
+            "parameters": {},
+            "type": "n8n-nodes-base.merge",
+            "typeVersion": 3.2,
+            "position": [3200, 800],
+            "id": "e822c2a8-52da-49e3-b80b-226bf83acb7d",
+            "name": "Folder ID",
+            "alwaysOutputData": false
+        },
+        {
+            "parameters": {
+                "amount": 30,
+                "unit": "minutes"
+            },
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [-1312, 944],
+            "id": "724ea4c3-d530-4fc9-afc2-09b754ac6da5",
+            "name": "Wait 30min #2",
+            "webhookId": "9187aa57-3488-44f0-8ac9-04fd98c581cf"
+        },
+        {
+            "parameters": {
+                "command": "# Delete the rendered video and temp assets from the specific Videos folder\nrm -f /tmp_media/PERSONA/Videos/*\n\n# OPTIONAL: Verify disk space (prints to logs)\ndf -h /tmp_media"
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [4320, 800],
+            "id": "92e7dbd9-2887-44f4-a138-b1ab9125230a",
+            "name": "Cleanup"
+        },
+        {
+            "parameters": {
+                "model": "llama-3.1-8b-instant",
+                "options": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+            "typeVersion": 1,
+            "position": [16, 976],
+            "id": "6fd5ad31-8b3e-4646-b7e8-ca785fd184e9",
+            "name": "Groq Chat Model2",
+            "alwaysOutputData": false,
+            "credentials": {
+                "groqApi": {
+                    "id": "GJ11w5G3QtKLwmqM",
+                    "name": "Groq account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "c32b5392-ee91-4685-bf6a-f29ca4bbb467",
+                            "leftValue": "={{ $json.text }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "empty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [288, 752],
+            "id": "15900a96-9ea1-4cc3-9563-1440654756a4",
+            "name": "If Rate Limited2"
+        },
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": "=You are a Viral Content Strategist for the [INSERT NICHE] niche.\nYour goal is to maximize \"Retention\" and \"Click-Through Rate\" for [INSERT TARGET AUDIENCE].\n\nI have a script for a short video (in [INSERT LANGUAGE]).\nYou must generate a Metadata JSON object containing:\n1. TITLE: A high-alert clickbait title (Max 6 words). Use ALL CAPS and 1 Emoji.\n2. DESCRIPTION: A 2-line hook addressing the audience as \"[INSERT AUDIENCE NAME]\", followed by a block of hashtags.\n\nSTORY SCRIPT:\n\"\"\"\n{{ $json.script }}\n\"\"\"\n\nINSTRUCTIONS:\n- **TITLE LOGIC (STRICT - PICK ONE CATEGORY):**\n  - If [INSERT THEME 1] -> Use: \"[INSERT CLICKBAIT TITLE 1]\"\n  - If [INSERT THEME 2] -> Use: \"[INSERT CLICKBAIT TITLE 2]\"\n  - If [INSERT THEME 3] -> Use: \"[INSERT CLICKBAIT TITLE 3]\"\n  - If [INSERT THEME 4] -> Use: \"[INSERT CLICKBAIT TITLE 4]\"\n  - **FALLBACK (If unclear)** -> Use: \"[INSERT GENERIC TITLE]\"\n\n- **DESCRIPTION RULES:** - Address the audience as \"[INSERT AUDIENCE NAME e.g., Chat, Squad, Chefs]\".\n  - Ask a rhetorical question related to the content.\n\n- **HASHTAGS (STRICT LIMIT: 5):**\n  - Mandatory: #[INSERT TAG 1] #[INSERT TAG 2]\n  - Pick 3 Variable: #[TAG_A], #[TAG_B], #[TAG_C], #[TAG_D], #[TAG_E].\n\n- **OUTPUT:** Respond ONLY with valid, raw JSON. Do NOT use markdown blocks (```json).\n\nEXAMPLE OUTPUT:\n{\n  \"title\": \"[YOUR TITLE HERE] 😱\",\n  \"description\": \"[Audience Name], look at this insane detail! Would you try this?\\n\\n#tag1 #tag2 #tag3\"\n}",
+                "batching": {}
+            },
+            "type": "@n8n/n8n-nodes-langchain.chainLlm",
+            "typeVersion": 1.8,
+            "position": [-64, 752],
+            "id": "dd1d524c-0037-40a2-99d5-eee29fcbc696",
+            "name": "Generate Title and Description",
+            "alwaysOutputData": true,
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "command": "=# --- SAVE METADATA TO FILE ---\n\n# 1. Get Data from Groq Node\nRAW_TITLE=\"{{ $json.title }}\"\nRAW_DESC=\"{{ $json.description }}\"\nBASE_DIR=\"/tmp_media/PERSONA/Videos\"\n\n# 2. Clean Title for Filename (Remove emojis/spaces)\nCLEAN_TITLE=$(echo \"$RAW_TITLE\" | sed 's/[^a-zA-Z0-9]/_/g' | tr -s '_')\n\n# 3. Create the Text File\n# Example: /tmp_media/PERSONA/Videos/THE_ZOMBIE_TOOTHBRUSH.txt\ncat <<EOF > \"${BASE_DIR}/${CLEAN_TITLE}.txt\"\n$RAW_TITLE\n\n$RAW_DESC\nEOF\n\necho \"${BASE_DIR}/${CLEAN_TITLE}.txt\""
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [736, 800],
+            "id": "182e412f-beee-4297-8a8d-aa873ee9cb58",
+            "name": "Save Metadata"
+        },
+        {
+            "parameters": {
+                "fileSelector": "={{ $('Save Metadata').item.json.stdout }}",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.readWriteFile",
+            "typeVersion": 1.1,
+            "position": [3872, 800],
+            "id": "97d29834-1c6e-456e-9234-bee3881ef4af",
+            "name": "Read Metadata"
+        },
+        {
+            "parameters": {
+                "name": "={{ $('Read Video File').item.json.fileName }}",
+                "driveId": {
+                    "__rl": true,
+                    "value": "={{ $('Folder ID').first().json.id }}",
+                    "mode": "id"
+                },
+                "folderId": {
+                    "__rl": true,
+                    "mode": "list",
+                    "value": "root",
+                    "cachedResultName": "/ (Root folder)"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.googleDrive",
+            "typeVersion": 3,
+            "position": [3648, 800],
+            "id": "4c4f11f8-2a8f-4db2-809e-0b042372e50b",
+            "name": "Upload Video File",
+            "credentials": {
+                "googleDriveOAuth2Api": {
+                    "id": "I74aMvSYuoFp8mrV",
+                    "name": "Google Drive account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "name": "={{ $('Format Groq').item.json.title }}_INFO.txt",
+                "driveId": {
+                    "__rl": true,
+                    "value": "={{ $('Folder ID').first().json.id }}",
+                    "mode": "id"
+                },
+                "folderId": {
+                    "__rl": true,
+                    "mode": "list",
+                    "value": "root",
+                    "cachedResultName": "/ (Root folder)"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.googleDrive",
+            "typeVersion": 3,
+            "position": [4096, 800],
+            "id": "77f8753a-1882-4a52-8f9b-2927bbd3a1d3",
+            "name": "Upload Metadata",
+            "credentials": {
+                "googleDriveOAuth2Api": {
+                    "id": "I74aMvSYuoFp8mrV",
+                    "name": "Google Drive account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "// Get the raw text output from the previous Groq node\n// Note: Adjust 'message.content' if your node outputs to 'text' or just 'content'\nconst rawContent = $input.first().json.text\n\n// 1. CLEANUP: Remove Markdown formatting (```json and ```)\nlet cleanContent = rawContent.replace(/```json/g, \"\").replace(/```/g, \"\").trim();\n\n// 2. PARSE: Turn string into an Object\nlet parsedData;\ntry {\n  parsedData = JSON.parse(cleanContent);\n} catch (error) {\n  // Fallback if AI completely failed to make JSON\n  parsedData = {\n    title: \"SCARY STORY 💀\",\n    description: \"Watch till the end... #horror #fyp\",\n    error: \"JSON Parse Failed\"\n  };\n}\n\n// 3. SANITIZE: Ensure Title is filename-safe (Just in case you use it for files)\n// We keep a 'safe_title' version for filenames, and 'raw_title' for TikTok/YouTube\nconst safeTitle = parsedData.title.replace(/[^a-zA-Z0-9]/g, \"_\").replace(/_+/g, \"_\");\n\nreturn {\n  json: {\n    title: parsedData.title,\n    safe_title: safeTitle,\n    description: parsedData.description\n  }\n};"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [512, 800],
+            "id": "a5f4d58c-bec3-4467-aa86-5285b4b8a9c2",
+            "name": "Format Metadata"
+        },
+        {
+            "parameters": {
+                "unit": "minutes"
+            },
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [4544, 800],
+            "id": "88af903a-adbb-4b73-b7c7-67c1eec28d2b",
+            "name": "Wait 5min",
+            "webhookId": "aafce306-12e8-4e0c-b297-8cf64513cca3"
+        },
+        {
+            "parameters": {
+                "authentication": "basicAuth",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2.1,
+            "position": [-3904, 672],
+            "id": "8535787a-30a2-40c2-9466-cf919a086770",
+            "name": "Webhook",
+            "webhookId": "0eb0abd5-932e-477b-b278-7a9770a43900",
+            "credentials": {
+                "httpBasicAuth": {
+                    "id": "Q78L6h4xJE5XvWrM",
+                    "name": "Unnamed credential"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "url": "http://localhost:5678/webhook/0eb0abd5-932e-477b-b278-7a9770a43900",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpBasicAuth",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.3,
+            "position": [4768, 800],
+            "id": "cb4157de-b227-44db-b087-b8ce2d67c21e",
+            "name": "Trigger the Webhook Again",
+            "credentials": {
+                "httpBasicAuth": {
+                    "id": "Q78L6h4xJE5XvWrM",
+                    "name": "Unnamed credential"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "// 1. Parse the AI Response\nlet aiResponse;\ntry {\n    // If your LLM outputs a string, parse it. If it's already JSON, just use it.\n    const rawText = $input.first().json.text || $input.first().json.content;\n    // Clean up any markdown code blocks ```json ... ```\n    const cleanJson = rawText.replace(/```json|```/g, '').trim();\n    aiResponse = JSON.parse(cleanJson);\n} catch (e) {\n    throw new Error(\"AI did not return valid JSON. Check Prompt.\");\n}\n\n// 2. Retrieve the Original List of Stories\n// We need the exact same list that was sent to the LLM to map the IDs back.\nconst allStories = $(\"Filter Used Stories\").all();\n\n// 3. Prepare the \"Trash List\" (Blacklist)\n// The LLM now gives us IDs (e.g., [0, 4, 7]), so we map those back to Titles.\nconst trashIndices = aiResponse.trash_indices || [];\nconst trashTitles = trashIndices\n    .map(index => {\n        // Safety check: Ensure the index actually exists in our list\n        if (allStories[index]) {\n            return allStories[index].json.title;\n        }\n        return null;\n    })\n    .filter(title => title !== null) // Remove any invalid lookups\n    .join('\\n');\n\n// 4. Prepare the \"Winner\"\nconst winnerIndex = aiResponse.selected_index;\nlet winnerTitle = null;\nlet winnerStoryBody = \"\";\n\n// Only proceed if the index is a valid number and exists in our list\nif (typeof winnerIndex === 'number' && allStories[winnerIndex]) {\n    const winnerItem = allStories[winnerIndex].json;\n    winnerTitle = winnerItem.title;\n    winnerStoryBody = winnerItem.story_text;\n}\n\n// 5. Output separate data for n8n to route\nreturn {\n    json: {\n        winner: {\n            title: winnerTitle,\n            text: winnerStoryBody,\n            // Simple boolean check: do we have a title?\n            hasWinner: !!winnerTitle\n        },\n        blacklist: {\n            titles: trashTitles, // This string goes to your \"Write File\" node\n            count: trashIndices.length\n        }\n    }\n};"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-1760, 672],
+            "id": "2eca6f0e-fc4a-488b-a725-50bfe617480e",
+            "name": "Get Selected Story"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "925addf1-a111-4711-b11b-0d80b7e3a918",
+                            "leftValue": "={{ $json.title }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "notEmpty",
+                                "singleValue": true
+                            }
+                        },
+                        {
+                            "id": "24063be2-a156-4cd9-ae45-a56312c9702b",
+                            "leftValue": "={{ $input.all().lenght }}",
+                            "rightValue": 5,
+                            "operator": {
+                                "type": "number",
+                                "operation": "lt"
+                            }
+                        }
+                    ],
+                    "combinator": "or"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-2560, 672],
+            "id": "00330319-5971-4bec-99c1-a8d59a21e407",
+            "name": "If No Stories"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "45596e6f-c4ba-4cec-9503-5238f8f31cab",
+                            "leftValue": "={{ $json.winner.hasWinner }}",
+                            "rightValue": false,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "true",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-1536, 672],
+            "id": "0cae0a69-7e17-41e7-9657-a6d5f1f587c6",
+            "name": "If No Winner"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "45596e6f-c4ba-4cec-9503-5238f8f31cab",
+                            "leftValue": "={{ $json.blacklist.count }}",
+                            "rightValue": 0,
+                            "operator": {
+                                "type": "number",
+                                "operation": "notEquals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-1312, 624],
+            "id": "653169b5-8b47-4f4c-83c7-640b3d5efdb6",
+            "name": "If Blacklisted"
+        },
+        {
+            "parameters": {
+                "command": "=BASE_DIR=\"/tmp_media/PERSONA\"\nTRACKING_FILE=\"${BASE_DIR}/used_stories.txt\"\n\n# 1. GET THE BLOCK OF TITLES\n# Note: We use the 'blacklist.titles' variable here.\n# We wrap it in quotes to preserve newlines.\nTITLES_TO_BAN=\"{{ $json.blacklist.titles }}\"\n\n# 2. APPEND TO FILE\n# Only run if there is actually text to save\nif [ ! -z \"$TITLES_TO_BAN\" ]; then\n    echo \"$TITLES_TO_BAN\" | sed 's/^[ \\t]*//;s/[ \\t]*$//' >> \"$TRACKING_FILE\"\nfi"
+            },
+            "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1,
+            "position": [-1088, 512],
+            "id": "e3e0bb2f-ceb4-4293-855a-40923b61c815",
+            "name": "Blacklist"
+        },
+        {
+            "parameters": {
+                "url": "http://localhost:5678/webhook/0eb0abd5-932e-477b-b278-7a9770a43900",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpBasicAuth",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.3,
+            "position": [736, 448],
+            "id": "2e5f25d2-38a7-409e-a06b-56abe459e795",
+            "name": "Trigger the Webhook Again1",
+            "credentials": {
+                "httpBasicAuth": {
+                    "id": "Q78L6h4xJE5XvWrM",
+                    "name": "Unnamed credential"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "url": "http://localhost:5678/webhook/0eb0abd5-932e-477b-b278-7a9770a43900",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpBasicAuth",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.3,
+            "position": [-1088, 944],
+            "id": "86b9afcc-4782-4abb-9b9f-f9d9736d2547",
+            "name": "Trigger the Webhook Again2",
+            "credentials": {
+                "httpBasicAuth": {
+                    "id": "Q78L6h4xJE5XvWrM",
+                    "name": "Unnamed credential"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "amount": 12,
+                "unit": "hours"
+            },
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [512, 448],
+            "id": "e1bdf614-68a4-4d0b-b274-319ab92ddae0",
+            "name": "Wait 12hrs",
+            "webhookId": "eef57f8e-486e-4ddf-b636-2654b9074242"
+        }
+    ],
+    "pinData": {},
+    "connections": {
+        "Render Video": {
+            "main": [
+                [
+                    {
+                        "node": "Save Used Title",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Split Caption": {
+            "main": [
+                [
+                    {
+                        "node": "Render Video",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Story": {
+            "main": [
+                [
+                    {
+                        "node": "Read Used Stories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Reddit RSS": {
+            "main": [
+                [
+                    {
+                        "node": "Format Story",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Groq": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Title and Description",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Groq Chat Model": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "Generate Script Groq",
+                        "type": "ai_languageModel",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate Script Groq": {
+            "main": [
+                [
+                    {
+                        "node": "If Rate Limited1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Groq Chat Model1": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "Select Story Groq",
+                        "type": "ai_languageModel",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Select Story Groq": {
+            "main": [
+                [
+                    {
+                        "node": "If Rate Limited",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Setup Directories & Variables": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Resources",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate Resources": {
+            "main": [
+                [
+                    {
+                        "node": "Audio Mixing",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Audio Mixing": {
+            "main": [
+                [
+                    {
+                        "node": "Cleanup & Permissions",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Cleanup & Permissions": {
+            "main": [
+                [
+                    {
+                        "node": "Split Caption",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Filter Used Stories": {
+            "main": [
+                [
+                    {
+                        "node": "If No Stories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Read Used Stories": {
+            "main": [
+                [
+                    {
+                        "node": "Filter Used Stories",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Save Used Title": {
+            "main": [
+                [
+                    {
+                        "node": "Google Drive Search",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Read Video File": {
+            "main": [
+                [
+                    {
+                        "node": "Upload Video File",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Create Daily Folder": {
+            "main": [
+                [
+                    {
+                        "node": "Folder ID",
+                        "type": "main",
+                        "index": 1
+                    }
+                ]
+            ]
+        },
+        "Google Drive Search": {
+            "main": [
+                [
+                    {
+                        "node": "If Folder Exists",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If Folder Exists": {
+            "main": [
+                [
+                    {
+                        "node": "Folder ID",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Create Daily Folder",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If Rate Limited": {
+            "main": [
+                [
+                    {
+                        "node": "Wait 12hrs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Get Selected Story",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If Rate Limited1": {
+            "main": [
+                [
+                    {
+                        "node": "Wait 12hrs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Format Groq",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Subreddits": {
+            "main": [
+                [
+                    {
+                        "node": "Reddit RSS",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Folder ID": {
+            "main": [
+                [
+                    {
+                        "node": "Read Video File",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait 30min #2": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger the Webhook Again2",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Cleanup": {
+            "main": [
+                [
+                    {
+                        "node": "Wait 5min",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Groq Chat Model2": {
+            "ai_languageModel": [
+                [
+                    {
+                        "node": "Generate Title and Description",
+                        "type": "ai_languageModel",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If Rate Limited2": {
+            "main": [
+                [
+                    {
+                        "node": "Wait 12hrs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Format Metadata",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate Title and Description": {
+            "main": [
+                [
+                    {
+                        "node": "If Rate Limited2",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Save Metadata": {
+            "main": [
+                [
+                    {
+                        "node": "Setup Directories & Variables",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Read Metadata": {
+            "main": [
+                [
+                    {
+                        "node": "Upload Metadata",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Upload Video File": {
+            "main": [
+                [
+                    {
+                        "node": "Read Metadata",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Upload Metadata": {
+            "main": [
+                [
+                    {
+                        "node": "Cleanup",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Metadata": {
+            "main": [
+                [
+                    {
+                        "node": "Save Metadata",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait 5min": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger the Webhook Again",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Subreddits",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Selected Story": {
+            "main": [
+                [
+                    {
+                        "node": "If No Winner",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If No Stories": {
+            "main": [
+                [
+                    {
+                        "node": "Select Story Groq",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Wait 30min #2",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If No Winner": {
+            "main": [
+                [
+                    {
+                        "node": "If Blacklisted",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Wait 30min #2",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "If Blacklisted": {
+            "main": [
+                [
+                    {
+                        "node": "Blacklist",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Generate Script Groq",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Blacklist": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Script Groq",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait 12hrs": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger the Webhook Again1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": false,
+    "settings": {
+        "executionOrder": "v1",
+        "availableInMCP": false
+    },
+    "versionId": "64ee0078-a0c2-41c0-934f-7fa2fdba9927",
+    "meta": {
+        "instanceId": "b22e9a6b0a34130ecc0fcc0945c8805aa8e8247e65f2d96d8eed64b1fd951a0d"
+    },
+    "id": "vQE13KlbUYDyP8X5",
+    "tags": []
+}
