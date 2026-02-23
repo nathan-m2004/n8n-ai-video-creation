@@ -140,3 +140,20 @@ This pipeline is provided as a **Generic Template**. You **must** configure the 
     -   Find the node named **`Select Story Groq`**.
     -   Update the **Selection Criteria**: Tell the AI exactly what makes a post a "Winner" for your audience.
     -   Update the **Trash Criteria**: Tell the AI what topics to strictly avoid (e.g., "Politics," "Low Effort," "Ads").
+
+
+
+
+
+Screenshots
+-
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/8e2f50b8-5652-474a-8fbd-cfbbcb7ccaa5" />
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/3e16b451-e671-40c9-b961-42f9f0151c9b" />
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/d566a264-73b0-43e3-9cdc-1f4ed77d69f7" />
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/aa2ca150-b919-4e21-ad65-51ef1ff0286b" />
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/3c0c4ff9-b618-4c55-81a8-334581ace9a2" />
+<img width="1563" height="1008" alt="image" src="https://github.com/user-attachments/assets/861b5a2e-2803-4a58-8d22-04cb8e92260e" />
+
+
+
+
